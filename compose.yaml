@@ -3,3 +3,5 @@ services:
     build: .
     env_file:
       - stack.env
+    environment:
+      - PYTHONUNBUFFERED=1
