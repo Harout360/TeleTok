@@ -1,8 +1,17 @@
+import logging
+import sys
+
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import BufferedInputFile, Message
 
 from settings import settings
 from tiktok.api import TikTokAPI
+
+logging.basicConfig(
+    stream=sys.stdout,
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 
 dp = Dispatcher()
 
@@ -34,6 +43,8 @@ async def handle_tiktok_request(message: Message, bot: Bot) -> None:
 
         video = BufferedInputFile(tiktok.video, filename="video.mp4")
         caption = tiktok.caption if settings.with_captions else None
+
+        logger.info(f"Sending message to chat ID: {message.chat.id}")
 
         if settings.reply_to_message:
             await message.reply_video(video=video, caption=caption)
