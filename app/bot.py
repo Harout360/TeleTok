@@ -14,6 +14,8 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+logger.info("Bot started...")
+print("Waiting for TikTok messages")
 
 dp = Dispatcher()
 
