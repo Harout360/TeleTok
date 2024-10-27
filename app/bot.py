@@ -45,7 +45,7 @@ async def handle_tiktok_request(message: Message, bot: Bot) -> None:
         if not tiktok.video:
             continue
 
-        await message.answer("Tiktok Link Processing...", reply_to_message_id=message.chat.id)
+        await message.answer("Tiktok Link Processing...", reply_to_message_id=message.message_id)
 
         await bot.send_message(
             chat_id=message.chat.id,
@@ -62,10 +62,10 @@ async def handle_tiktok_request(message: Message, bot: Bot) -> None:
 
         logging.exception(f"Sending message to chat ID: {message.chat.id}")
 
-        if settings.reply_to_message:
-            await message.reply_video(video=video, caption=caption)
-        else:
-            await bot.send_video(chat_id=message.chat.id, video=video, caption=caption)
+        # if settings.reply_to_message:
+        #     await message.reply_video(video=video, caption=caption)
+        # else:
+        #     await bot.send_video(chat_id=message.chat.id, video=video, caption=caption)
 
 
 # IG
