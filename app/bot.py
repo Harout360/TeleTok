@@ -11,14 +11,7 @@ from settings import settings
 from tiktok.api import TikTokAPI
 from urllib.parse import urlparse
 
-logging.basicConfig(
-    stream=sys.stdout,
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-
-logger = logging.getLogger(__name__)
-logger.info("Bot started...")
+logging.exception("Bot started...")
 print("Waiting for TikTok messages")
 
 dp = Dispatcher()
@@ -45,6 +38,9 @@ async def handle_tiktok_request(message: Message, bot: Bot) -> None:
         for u in filter(lambda e: "tiktok.com" in e, entries)
     ]
 
+    logging.exception("Processing Tiktok link: ", urls[0])
+    await message.answer("Tiktok Link Processing...", reply_to_message_id=message.chat.id)
+
     async for tiktok in TikTokAPI.download_tiktoks(urls):
         if not tiktok.video:
             continue
@@ -52,7 +48,7 @@ async def handle_tiktok_request(message: Message, bot: Bot) -> None:
         video = BufferedInputFile(tiktok.video, filename="video.mp4")
         caption = tiktok.caption if settings.with_captions else None
 
-        logger.info(f"Sending message to chat ID: {message.chat.id}")
+        logging.exception(f"Sending message to chat ID: {message.chat.id}")
 
         if settings.reply_to_message:
             await message.reply_video(video=video, caption=caption)
@@ -86,6 +82,8 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
         for u in filter(lambda e: "instagram.com" in e, entries)
     ]
 
+    await message.answer("IG Link Processing...", reply_to_message_id=message.chat.id)
+
     for url in urls:
         try:
             # Parse the URL to get the path
@@ -96,12 +94,12 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
             if len(path_parts) >= 2 and path_parts[0] == "reel":
                 shortcode = path_parts[1]
             else:
-                logger.error(f"Invalid Instagram reel URL: {url}")
+                logging.exception(f"Invalid Instagram reel URL: {url}")
                 continue
 
             # Construct the target directory path using pathlib
             target_dir = Path("downloads") / f"instagram_{shortcode}"
-            logger.info(f"Creating directory: {target_dir}")
+            logging.exception(f"Creating directory: {target_dir}")
             # Create the directory if it doesn't exist
             target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -123,7 +121,7 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
                     video = BufferedInputFile(
                         video_data.read(), filename="insta_video.mp4")
 
-                logger.info(f"Sending Instagram video to chat ID: {
+                logging.exception(f"Sending Instagram video to chat ID: {
                             message.chat.id}")
 
                 if settings.reply_to_message:
@@ -137,4 +135,4 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
             os.rmdir(target_dir)
 
         except Exception as e:
-            logger.error(f"Error downloading Instagram video: {e}")
+            logging.exception(f"Error downloading Instagram video: {e}")
