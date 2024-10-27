@@ -2,6 +2,7 @@ import logging
 import sys
 import instaloader
 import os
+from pathlib import Path
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import BufferedInputFile, Message
@@ -98,14 +99,17 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
                 logger.error(f"Invalid Instagram reel URL: {url}")
                 continue
 
+            # Construct the target directory path using pathlib
+            target_dir = Path("downloads") / f"instagram_{shortcode}"
+            logger.info(f"Creating directory: {target_dir}")
+            # Create the directory if it doesn't exist
+            target_dir.mkdir(parents=True, exist_ok=True)
+
+            # Load the post using the shortcode
             post = instaloader.Post.from_shortcode(
                 insta_loader.context, shortcode)
-
-            # Define the directory to download the post to
-            target_dir = f"downloads/instagram_{shortcode}"
-            os.makedirs(target_dir, exist_ok=True)
-
-            # Download the post, which includes video and other media
+            
+            # Download the post
             insta_loader.download_post(post, target_dir)
 
             # Find the video file in the download directory
