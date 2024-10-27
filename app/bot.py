@@ -41,6 +41,12 @@ async def handle_tiktok_request(message: Message, bot: Bot) -> None:
     logging.exception("Processing Tiktok link: ", urls[0])
     await message.answer("Tiktok Link Processing...", reply_to_message_id=message.chat.id)
 
+    await bot.send_message(
+        chat_id=message.chat.id,
+        text="This is a reply to your message!",
+        reply_to_message_id=message.message_id
+    )
+
     async for tiktok in TikTokAPI.download_tiktoks(urls):
         if not tiktok.video:
             continue
