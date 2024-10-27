@@ -11,15 +11,7 @@ from settings import settings
 from tiktok.api import TikTokAPI
 from urllib.parse import urlparse
 
-logging.basicConfig(
-    stream=sys.stdout,
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
-
 logger = logging.getLogger(__name__)
-logger.info("Bot started...")
-print("Waiting for TikTok messages")
 
 dp = Dispatcher()
 
@@ -44,6 +36,8 @@ async def handle_tiktok_request(message: Message, bot: Bot) -> None:
         u if u.startswith("http") else f"https://{u}"
         for u in filter(lambda e: "tiktok.com" in e, entries)
     ]
+
+    await message.reply("Tiktok URL detected! Processing your request...")
 
     async for tiktok in TikTokAPI.download_tiktoks(urls):
         if not tiktok.video:
@@ -85,6 +79,10 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
         u if u.startswith("http") else f"https://{u}"
         for u in filter(lambda e: "instagram.com" in e, entries)
     ]
+
+    if urls:
+        await message.reply("Instagram URL detected! Processing your request...")
+
 
     for url in urls:
         try:
