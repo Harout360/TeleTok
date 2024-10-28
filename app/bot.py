@@ -133,8 +133,7 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
                     video = BufferedInputFile(
                         video_data.read(), filename="insta_video.mp4")
 
-                logging.exception(f"Sending Instagram video to chat ID: {
-                            message.chat.id}")
+                logging.exception(f"Sending Instagram video to chat ID: {message.chat.id}")
 
                 if settings.reply_to_message:
                     await message.reply_video(video=video)
