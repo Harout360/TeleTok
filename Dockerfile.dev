@@ -1,0 +1,11 @@
+FROM python:3.11.8-alpine
+
+WORKDIR /code
+
+COPY pyproject.toml requirements.txt ./
+
+RUN pip install -r requirements.txt \
+    && pip install debugpy pytest  # Add development dependencies
+
+# Don't copy the app directory - we'll use volumes
+CMD [ "python","-u", "app/main.py" ] 

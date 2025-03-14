@@ -130,3 +130,10 @@ dmypy.json
 .idea/
 .DS_Store
 local.env
+
+# Environment files
+local.env
+stack.env
+stack.dev.env
+*.env
+!stack.env.example

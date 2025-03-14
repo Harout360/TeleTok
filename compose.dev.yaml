@@ -1,0 +1,10 @@
+services:
+  teletok:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    env_file:
+      - stack.dev.env
+    volumes:
+      - ./app:/code/app # Add volume for hot-reloading
+    restart: "no" # Don't automatically restart in development 
