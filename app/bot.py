@@ -5,13 +5,36 @@ import os
 from pathlib import Path
 import random
 import asyncio
+import tempfile
+import shutil
+import ffmpeg  # We'll need this for video processing
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import BufferedInputFile, Message
+from aiogram.enums import ParseMode
 
 from settings import settings
 from tiktok.api import TikTokAPI
 from urllib.parse import urlparse
+
+# Butler-style processing messages
+INSTAGRAM_BUTLER_MESSAGES = [
+    "🎩 Right away, sir! Fetching your Instagram reel...",
+    "🧐 Splendid choice! Allow me to retrieve that for you...",
+    "🎬 Ah, excellent taste! One moment while I prepare your video...",
+    "🎭 With pleasure! Acquiring your entertainment posthaste...",
+    "🎪 Most certainly! Your video shall arrive momentarily...",
+    "🎠 Delighted to assist! Fetching your content with utmost haste..."
+]
+
+TIKTOK_BUTLER_MESSAGES = [
+    "🎩 Ah, TikTok! I shall fetch that for you promptly...",
+    "🧐 A TikTok request! Allow me to retrieve that masterpiece...",
+    "🎬 Excellent choice of TikTok! One moment, if you please...",
+    "🎭 With pleasure! Your TikTok video shall arrive shortly...",
+    "🎪 Splendid TikTok selection! Processing with utmost care...",
+    "🎠 Right away! Preparing your TikTok entertainment..."
+]
 
 # Configure logging
 logging.basicConfig(
@@ -72,6 +95,51 @@ tiktokFilters = [
 ]
 
 
+async def process_video_file(video_data: bytes, filename: str) -> tuple[bytes, int, int]:
+    """Process video to ensure correct aspect ratio and format for Telegram.
+    Returns tuple of (processed_video_bytes, width, height)"""
+    with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as temp_in:
+        temp_in.write(video_data)
+        temp_in.flush()
+
+        # Create a temporary output file
+        temp_out = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False)
+        temp_out.close()
+
+        try:
+            # Get video information
+            probe = ffmpeg.probe(temp_in.name)
+            video_info = next(
+                s for s in probe['streams'] if s['codec_type'] == 'video')
+            width = int(video_info['width'])
+            height = int(video_info['height'])
+
+            # Process video while maintaining aspect ratio
+            stream = ffmpeg.input(temp_in.name)
+            stream = ffmpeg.output(
+                stream,
+                temp_out.name,
+                vcodec='h264',
+                acodec='aac',
+                format='mp4',      # Explicitly set container format
+                video_bitrate='2M',
+                audio_bitrate='128k',
+                vf=f'scale={width}:{height}:force_original_aspect_ratio=decrease',
+                strict='experimental'
+            )
+
+            ffmpeg.run(stream, capture_stdout=True,
+                       capture_stderr=True, overwrite_output=True)
+
+            # Read the processed video
+            with open(temp_out.name, 'rb') as f:
+                return f.read(), width, height
+        finally:
+            # Clean up temporary files
+            os.unlink(temp_in.name)
+            os.unlink(temp_out.name)
+
+
 @dp.message(*tiktokFilters)
 @dp.channel_post(*tiktokFilters)
 async def handle_tiktok_request(message: Message, bot: Bot) -> None:
@@ -90,19 +158,45 @@ async def handle_tiktok_request(message: Message, bot: Bot) -> None:
 
     async for tiktok in TikTokAPI.download_tiktoks(urls):
         if not tiktok.video:
+            logger.warning(f"No video data found for TikTok URL: {urls[0]}")
             continue
 
-        await message.answer("Tiktok Link Processing...", reply_to_message_id=message.message_id)
+        processing_msg = await message.answer(random.choice(TIKTOK_BUTLER_MESSAGES), reply_to_message_id=message.message_id)
 
-        video = BufferedInputFile(tiktok.video, filename="video.mp4")
-        caption = tiktok.caption if settings.with_captions else None
+        try:
+            # Process video to maintain aspect ratio
+            processed_video, width, height = await process_video_file(tiktok.video, "tiktok_video.mp4")
+            video = BufferedInputFile(processed_video, filename="video.mp4")
+            caption = tiktok.caption if settings.with_captions else None
 
-        logger.info(f"Sending TikTok video to chat ID: {message.chat.id}")
+            logger.info(
+                f"Sending TikTok video to chat ID: {message.chat.id} with dimensions {width}x{height}")
 
-        if settings.reply_to_message:
-            await message.reply_video(video=video, caption=caption)
-        else:
-            await bot.send_video(chat_id=message.chat.id, video=video, caption=caption)
+            if settings.reply_to_message:
+                await message.reply_video(
+                    video=video,
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    width=width,
+                    height=height,
+                    supports_streaming=True
+                )
+            else:
+                await bot.send_video(
+                    chat_id=message.chat.id,
+                    video=video,
+                    caption=caption,
+                    parse_mode=ParseMode.HTML,
+                    width=width,
+                    height=height,
+                    supports_streaming=True
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to process TikTok video: {e}")
+            await message.reply("🎭 My sincerest apologies, but I encountered difficulties processing this TikTok video.")
+        finally:
+            await processing_msg.delete()
 
 
 # IG
@@ -129,7 +223,7 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
         for u in filter(lambda e: "instagram.com" in e, entries)
     ]
 
-    await message.answer("IG Link Processing...", reply_to_message_id=message.message_id)
+    processing_msg = await message.answer(random.choice(INSTAGRAM_BUTLER_MESSAGES), reply_to_message_id=message.message_id)
 
     for url in urls:
         try:
@@ -145,15 +239,6 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
                 await message.reply("Invalid Instagram reel URL. Please send a valid reel link.")
                 continue
 
-            # Add more random delay between 2-5 seconds before each request
-            await asyncio.sleep(random.uniform(2, 5))
-
-            # Construct the target directory path using pathlib
-            target_dir = Path("downloads") / f"instagram_{shortcode}"
-            logger.info(f"Creating directory: {target_dir}")
-            # Create the directory if it doesn't exist
-            target_dir.mkdir(parents=True, exist_ok=True)
-
             try:
                 # Load the post using the shortcode with retry logic
                 max_retries = 3
@@ -168,40 +253,67 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
                         retry_count += 1
                         if retry_count == max_retries:
                             raise
-                        # Increase delay between retries (exponential backoff)
-                        delay = random.uniform(3, 7) * retry_count
                         logger.warning(
-                            f"Retry {retry_count}/{max_retries} after error: {e}. Waiting {delay:.1f}s")
-                        await asyncio.sleep(delay)
+                            f"Retry {retry_count}/{max_retries} after error: {e}")
 
-                # Download the post
-                insta_loader.download_post(post, target_dir)
+                # Create a temporary directory that will be automatically cleaned up
+                with tempfile.TemporaryDirectory() as temp_dir:
+                    # Download the post to the temporary directory
+                    insta_loader.dirname_pattern = temp_dir
+                    insta_loader.download_post(post, target=shortcode)
 
-                # Find the video file in the download directory
-                video_file = next(
-                    (f for f in os.listdir(target_dir) if f.endswith(".mp4")), None
-                )
+                    # Find the video file in the temporary directory
+                    video_path = next(
+                        (os.path.join(root, f)
+                         for root, _, files in os.walk(temp_dir)
+                         for f in files if f.endswith('.mp4')),
+                        None
+                    )
 
-                if video_file:
-                    video_path = os.path.join(target_dir, video_file)
-                    with open(video_path, 'rb') as video_data:
+                    if video_path:
+                        with open(video_path, 'rb') as video_file:
+                            video_data = video_file.read()
+
+                        # Process video to maintain aspect ratio
+                        processed_video, width, height = await process_video_file(video_data, "instagram_video.mp4")
                         video = BufferedInputFile(
-                            video_data.read(), filename="insta_video.mp4")
+                            processed_video, filename="insta_video.mp4")
+                        caption = post.caption if settings.with_captions else None
 
-                    logger.info(
-                        f"Sending Instagram video to chat ID: {message.chat.id}")
+                        logger.info(
+                            f"Sending Instagram video to chat ID: {message.chat.id} with dimensions {width}x{height}")
 
-                    if settings.reply_to_message:
-                        await message.reply_video(video=video)
+                        if settings.reply_to_message:
+                            await message.reply_video(
+                                video=video,
+                                caption=caption,
+                                parse_mode=ParseMode.HTML,
+                                width=width,
+                                height=height,
+                                supports_streaming=True
+                            )
+                        else:
+                            await bot.send_video(
+                                chat_id=message.chat.id,
+                                video=video,
+                                caption=caption,
+                                parse_mode=ParseMode.HTML,
+                                width=width,
+                                height=height,
+                                supports_streaming=True
+                            )
+
+                        await processing_msg.delete()
                     else:
-                        await bot.send_video(chat_id=message.chat.id, video=video)
-                else:
-                    logger.warning(f"No video file found in {target_dir}")
-                    await message.reply("Sorry, couldn't find a video in this Instagram post.")
+                        logger.warning(
+                            f"No video file found for post {shortcode}")
+                        await processing_msg.delete()
+                        await message.reply("Sorry, couldn't find a video in this Instagram post.")
 
             except instaloader.exceptions.ConnectionException as e:
                 if "429" in str(e):
                     logger.error("Rate limited by Instagram")
+                    await processing_msg.delete()
                     await message.reply("Instagram is rate limiting us. Please try again in a few minutes.")
                 elif "401" in str(e):
                     logger.error("Instagram authentication required")
@@ -216,12 +328,15 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
                         logger.error(
                             f"Failed to refresh session: {login_error}")
                         await message.reply("This reel requires authentication. Please try another reel or contact the bot administrator.")
+                    await processing_msg.delete()
                 else:
                     logger.exception(f"Instagram connection error: {e}")
+                    await processing_msg.delete()
                     await message.reply("Error connecting to Instagram. Please try again later.")
             except Exception as e:
                 if "403" in str(e):
                     logger.error(f"Instagram access forbidden: {e}")
+                    await processing_msg.delete()
                     await message.reply("Sorry, Instagram is currently blocking our requests. Please try again in a few minutes.")
                 elif "401" in str(e):
                     logger.error("Instagram authentication required")
@@ -236,18 +351,13 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
                         logger.error(
                             f"Failed to refresh session: {login_error}")
                         await message.reply("This reel requires authentication. Please try another reel or contact the bot administrator.")
+                    await processing_msg.delete()
                 else:
                     logger.exception(f"Error processing Instagram reel: {e}")
+                    await processing_msg.delete()
                     await message.reply("Sorry, there was an error processing your Instagram link.")
-
-            # Cleanup: Remove downloaded files after sending
-            try:
-                for file in os.listdir(target_dir):
-                    os.remove(os.path.join(target_dir, file))
-                os.rmdir(target_dir)
-            except Exception as e:
-                logger.error(f"Error cleaning up directory {target_dir}: {e}")
 
         except Exception as e:
             logger.exception(f"Error downloading Instagram video: {e}")
+            await processing_msg.delete()
             await message.reply("Sorry, there was an error processing your Instagram link.")
