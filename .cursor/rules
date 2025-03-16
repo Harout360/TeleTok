@@ -1,0 +1,1 @@
+command to update dockerhub image: docker buildx build --platform linux/amd64,linux/arm64 -t possumm/telefanso:latest --push .
