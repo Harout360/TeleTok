@@ -13,6 +13,7 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.types import BufferedInputFile, Message
 from aiogram.enums import ParseMode
 
+import instaloader_patch
 from settings import settings
 from tiktok.api import TikTokAPI
 from urllib.parse import urlparse
@@ -45,6 +46,9 @@ logger = logging.getLogger(__name__)
 
 logger.info("Initializing bot dispatcher...")
 
+# Instagram's current API breaks instaloader 4.15.2; see app/instaloader_patch.py
+instaloader_patch.apply()
+
 # Initialize dispatcher only (bot is initialized in main.py)
 dp = Dispatcher()
 
@@ -58,7 +62,11 @@ insta_loader = instaloader.Instaloader(
     compress_json=False,
     max_connection_attempts=5,
     request_timeout=30,
-    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    # The i.instagram.com endpoint used to fetch higher-quality video rejects web-session
+    # cookies with "login_required", so every download burned ~8s on doomed retries before
+    # falling back to the standard video. Skip straight to the fallback.
+    iphone_support=False,
+    user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
     quiet=True
 )
 
@@ -255,6 +263,20 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
                         f"Retry {retry_count}/{max_retries} after bad response: {e}")
                     if retry_count == max_retries:
                         raise
+                except TypeError as e:
+                    # Instagram returned an empty/invalid response, usually because
+                    # the session is expired or unauthenticated (rate-limited).
+                    if "NoneType" in str(e):
+                        logger.warning(
+                            "Instagram returned an empty response, session may be invalid. "
+                            "Attempting to refresh login...")
+                        await login_to_instagram(force_new=True)
+                        retry_count += 1
+                        last_error = e
+                        if retry_count == max_retries:
+                            raise
+                        continue
+                    raise
 
             if post is None:
                 raise Exception("Failed to fetch post data after all retries")
@@ -329,6 +351,14 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
                 f"Processing timed out after {TIMEOUT_SECONDS} seconds")
             await processing_msg.delete()
             await message.reply("Sorry, the request timed out. Please try again later.")
+        except instaloader.exceptions.AbortDownloadException as e:
+            # Instagram is demanding a checkpoint/challenge/feedback verification on this
+            # account - retrying won't help, this needs manual intervention.
+            logger.error(f"Instagram aborted the download, account may be flagged: {e}")
+            await processing_msg.delete()
+            await message.reply(
+                "Sorry, Instagram is requiring additional verification on this account "
+                "right now. This isn't something retrying will fix.")
         except Exception as e:
             logger.exception(f"Error downloading Instagram video: {e}")
             await processing_msg.delete()

@@ -137,3 +137,10 @@ stack.env
 stack.dev.env
 *.env
 !stack.env.example
+
+# Personal developer notes
+NOTES.md
+CLAUDE.md
+
+# Instaloader session files - these contain a live authenticated sessionid cookie
+session-*
