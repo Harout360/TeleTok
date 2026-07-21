@@ -7,4 +7,8 @@ services:
       - stack.dev.env
     volumes:
       - ./app:/code/app # Add volume for hot-reloading
-    restart: "no" # Don't automatically restart in development 
+      - teletok-session-dev:/data # Persist the Instagram session between restarts
+    restart: "no" # Don't automatically restart in development
+
+volumes:
+  teletok-session-dev:

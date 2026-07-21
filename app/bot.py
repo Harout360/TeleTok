@@ -70,12 +70,16 @@ insta_loader = instaloader.Instaloader(
     quiet=True
 )
 
-# Try to login to Instagram if credentials are provided
-if hasattr(settings, 'instagram_username') and hasattr(settings, 'instagram_password'):
+# Try to login to Instagram if credentials are provided.
+# Note: settings is a dataclass, so hasattr() is always True here - check the values.
+if settings.instagram_username and settings.instagram_password:
+    # Lives on a volume (see compose.yaml) so the session outlives the container.
+    session_file = Path(settings.session_dir) / f"session-{settings.instagram_username}"
+
     async def login_to_instagram(force_new=False):
         try:
             logger.info("Logging into Instagram...")
-            session_file = Path("session-" + settings.instagram_username)
+            session_file.parent.mkdir(parents=True, exist_ok=True)
 
             if not force_new and session_file.exists():
                 logger.info("Loading existing session...")
@@ -93,13 +97,13 @@ if hasattr(settings, 'instagram_username') and hasattr(settings, 'instagram_pass
                 insta_loader.login(settings.instagram_username,
                                    settings.instagram_password)
                 insta_loader.save_session_to_file(session_file)
-                logger.info("Successfully created new session")
+                logger.info(f"Successfully created new session at {session_file}")
 
             return True
         except Exception as e:
             logger.error(f"Failed to login to Instagram: {e}")
-            if session_file.exists():
-                session_file.unlink()  # Remove failed session file
+            # Don't leave a half-written session behind for the next start to load.
+            session_file.unlink(missing_ok=True)
             return False
 
     # Create startup handler to initialize Instagram login

@@ -9,3 +9,11 @@ services:
       replicas: 1
     labels:
       - "com.docker.stack.namespace=teletok"
+    volumes:
+      # Persists the Instagram session across redeploys. Without this the bot logs in
+      # from scratch on every restart, which Instagram treats as suspicious.
+      # Must not be mounted at /code - that would shadow the application code.
+      - teletok-session:/data
+
+volumes:
+  teletok-session:

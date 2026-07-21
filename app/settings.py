@@ -12,6 +12,7 @@ class Settings:
     with_captions: bool
     instagram_username: Optional[str]
     instagram_password: Optional[str]
+    session_dir: str
 
 
 def parse_env_list(key: str) -> list[int]:
@@ -29,4 +30,7 @@ settings = Settings(
     with_captions=parse_env_bool("WITH_CAPTIONS", default="true"),
     instagram_username=os.getenv("INSTAGRAM_USERNAME"),
     instagram_password=os.getenv("INSTAGRAM_PASSWORD"),
+    # Kept on a volume so the Instagram session survives redeploys; logging in afresh on
+    # every restart is a strong signal for Instagram to checkpoint the account.
+    session_dir=os.getenv("SESSION_DIR", "/data"),
 )
