@@ -3,7 +3,9 @@ import sys
 import instaloader
 import os
 from pathlib import Path
+import html
 import random
+import re
 import asyncio
 import tempfile
 import shutil
@@ -11,7 +13,12 @@ from contextlib import suppress
 from video_processor import process_video_file  # Import from new module
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import BufferedInputFile, Message
+from aiogram.types import (
+    BufferedInputFile,
+    InputMediaPhoto,
+    InputMediaVideo,
+    Message,
+)
 from aiogram.enums import ParseMode
 
 import instaloader_patch
@@ -21,21 +28,21 @@ from urllib.parse import urlparse
 
 # Butler-style processing messages
 INSTAGRAM_BUTLER_MESSAGES = [
-    "🎩 Right away, sir! Fetching your Instagram reel...",
-    "🧐 Splendid choice! Allow me to retrieve that for you...",
-    "🎬 Ah, excellent taste! One moment while I prepare your video...",
-    "🎭 With pleasure! Acquiring your entertainment posthaste...",
-    "🎪 Most certainly! Your video shall arrive momentarily...",
-    "🎠 Delighted to assist! Fetching your content with utmost haste..."
+    "🎩 Another one? Very well. Fetching it, since you clearly can't...",
+    "🧐 Riveting. I'll retrieve this for you, as is apparently my lot in life...",
+    "🎬 Ah yes, THIS post. Truly the pinnacle of human achievement. Downloading...",
+    "🎭 Say no more. Actually, please do say less. Working on it...",
+    "🎪 One Instagram post, coming right up. Do try to contain your excitement...",
+    "🎠 I live to serve, allegedly. Fetching your little video..."
 ]
 
 TIKTOK_BUTLER_MESSAGES = [
-    "🎩 Ah, TikTok! I shall fetch that for you promptly...",
-    "🧐 A TikTok request! Allow me to retrieve that masterpiece...",
-    "🎬 Excellent choice of TikTok! One moment, if you please...",
-    "🎭 With pleasure! Your TikTok video shall arrive shortly...",
-    "🎪 Splendid TikTok selection! Processing with utmost care...",
-    "🎠 Right away! Preparing your TikTok entertainment..."
+    "🎩 TikTok. Naturally. Fetching it before you ask again...",
+    "🧐 Ah, TikTok — for when Instagram was too intellectual. Retrieving...",
+    "🎬 I'll get it. I always get it. That's the whole arrangement, isn't it...",
+    "🎭 Another TikTok for the collection. Your standards remain consistent...",
+    "🎪 Downloading. Please enjoy responsibly, or however you enjoy these things...",
+    "🎠 Right. Fetching your TikTok. This is what I trained for, apparently..."
 ]
 
 # Configure logging
@@ -132,6 +139,58 @@ def extract_shortcode(url: str) -> str | None:
         if part in INSTAGRAM_MEDIA_PATHS:
             return path_parts[index + 1]
     return None
+
+
+# Extensions instaloader writes that we actually want to forward. It also drops a
+# .txt caption and a .json.xz metadata file next to them, which we ignore.
+PHOTO_EXTENSIONS = (".jpg", ".jpeg")
+VIDEO_EXTENSIONS = (".mp4",)
+
+# Telegram's limits: 10 items per album, 1024 characters per caption.
+MEDIA_GROUP_LIMIT = 10
+CAPTION_LIMIT = 1024
+
+
+def _natural_sort_key(path: str) -> list:
+    """Sort key that compares digit runs numerically.
+
+    Instaloader names carousel items <target>_1.jpg, <target>_2.mp4, ... and a plain
+    lexicographic sort would put _10 before _2. Carousels go up to 20 items, so the
+    post's original order depends on this.
+    """
+    return [
+        int(chunk) if chunk.isdigit() else chunk
+        for chunk in re.split(r"(\d+)", os.path.basename(path))
+    ]
+
+
+def collect_media_files(directory: str) -> list[str]:
+    """Return every photo/video instaloader downloaded, in the post's original order."""
+    media = [
+        os.path.join(root, f)
+        for root, _, files in os.walk(directory)
+        for f in files
+        if f.lower().endswith(PHOTO_EXTENSIONS + VIDEO_EXTENSIONS)
+    ]
+    return sorted(media, key=_natural_sort_key)
+
+
+def build_caption(post) -> str | None:
+    """Escape and truncate a post caption so Telegram will accept it.
+
+    We send with parse_mode=HTML, so a caption containing < or & would otherwise make
+    Telegram reject the whole message.
+    """
+    if not settings.with_captions or not post.caption:
+        return None
+
+    caption = html.escape(post.caption)
+    if len(caption) > CAPTION_LIMIT:
+        caption = caption[:CAPTION_LIMIT - 1]
+        # Truncating can slice an escaped entity in half (&amp; -> &am), which is
+        # invalid HTML and would be rejected. Drop any trailing partial entity.
+        caption = re.sub(r"&[#a-zA-Z0-9]*$", "", caption) + "…"
+    return caption
 
 
 tiktokFilters = [
@@ -245,6 +304,102 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
             await processing_msg.delete()
 
 
+async def _send_single_photo(path: str, caption: str | None,
+                             message: Message, bot: Bot) -> None:
+    with open(path, 'rb') as photo_file:
+        photo = BufferedInputFile(photo_file.read(), filename="insta_photo.jpg")
+
+    logger.info(f"Sending Instagram photo to chat ID: {message.chat.id}")
+    if settings.reply_to_message:
+        await message.reply_photo(
+            photo=photo, caption=caption, parse_mode=ParseMode.HTML)
+    else:
+        await bot.send_photo(
+            chat_id=message.chat.id, photo=photo, caption=caption,
+            parse_mode=ParseMode.HTML)
+
+
+async def _send_single_video(path: str, caption: str | None,
+                             message: Message, bot: Bot) -> None:
+    with open(path, 'rb') as video_file:
+        video_data = video_file.read()
+
+    logger.info("Processing video file...")
+    processed_video, width, height = await process_video_file(
+        video_data, "instagram_video.mp4")
+    video = BufferedInputFile(processed_video, filename="insta_video.mp4")
+
+    logger.info(
+        f"Sending Instagram video to chat ID: {message.chat.id} with dimensions {width}x{height}")
+    if settings.reply_to_message:
+        await message.reply_video(
+            video=video, caption=caption, parse_mode=ParseMode.HTML,
+            width=width, height=height, supports_streaming=True)
+    else:
+        await bot.send_video(
+            chat_id=message.chat.id, video=video, caption=caption,
+            parse_mode=ParseMode.HTML, width=width, height=height,
+            supports_streaming=True)
+
+
+async def _build_media_group_item(path: str, index: int, caption: str | None):
+    """Wrap one downloaded file as an album item, re-encoding videos if needed."""
+    with open(path, 'rb') as media_file:
+        data = media_file.read()
+
+    if path.lower().endswith(VIDEO_EXTENSIONS):
+        processed_video, width, height = await process_video_file(
+            data, os.path.basename(path))
+        return InputMediaVideo(
+            media=BufferedInputFile(
+                processed_video, filename=f"insta_video_{index}.mp4"),
+            caption=caption,
+            parse_mode=ParseMode.HTML if caption else None,
+            width=width,
+            height=height,
+            supports_streaming=True,
+        )
+
+    return InputMediaPhoto(
+        media=BufferedInputFile(data, filename=f"insta_photo_{index}.jpg"),
+        caption=caption,
+        parse_mode=ParseMode.HTML if caption else None,
+    )
+
+
+async def send_instagram_media(media_files: list[str], caption: str | None,
+                               message: Message, bot: Bot) -> None:
+    """Send a post's media: a single photo/video, or a carousel as album(s)."""
+    if len(media_files) == 1:
+        path = media_files[0]
+        if path.lower().endswith(VIDEO_EXTENSIONS):
+            await _send_single_video(path, caption, message, bot)
+        else:
+            await _send_single_photo(path, caption, message, bot)
+        return
+
+    # Only the very first item carries the caption - that is how Telegram renders a
+    # caption for the album as a whole.
+    items = [
+        await _build_media_group_item(path, index, caption if index == 0 else None)
+        for index, path in enumerate(media_files)
+    ]
+
+    # Telegram allows at most 10 items per album, so longer carousels go out as
+    # consecutive albums.
+    for chunk_start in range(0, len(items), MEDIA_GROUP_LIMIT):
+        chunk = items[chunk_start:chunk_start + MEDIA_GROUP_LIMIT]
+
+        logger.info(
+            f"Sending album of {len(chunk)} item(s) to chat ID: {message.chat.id}")
+        await bot.send_media_group(
+            chat_id=message.chat.id,
+            media=chunk,
+            reply_to_message_id=(
+                message.message_id if settings.reply_to_message else None),
+        )
+
+
 async def _process_instagram_urls(urls, message: Message, bot: Bot,
                                   start_time: float, TIMEOUT_SECONDS: int) -> None:
     for url in urls:
@@ -329,55 +484,25 @@ async def _process_instagram_urls(urls, message: Message, bot: Bot,
                 insta_loader.download_post(post, target=shortcode)
                 logger.info("Post download completed")
 
-                # Find the video file in the temporary directory
-                video_path = next(
-                    (os.path.join(root, f)
-                     for root, _, files in os.walk(temp_dir)
-                     for f in files if f.endswith('.mp4')),
-                    None
-                )
+                # Collect every photo/video in the post, not just the first video -
+                # a post can be a single photo, a single video, or a carousel of both.
+                media_files = collect_media_files(temp_dir)
 
-                if not video_path:
-                    logger.warning(f"No video file found for post {shortcode}")
-                    await message.reply("Sorry, couldn't find a video in this Instagram post.")
+                if not media_files:
+                    logger.warning(f"No media files found for post {shortcode}")
+                    await message.reply("Sorry, couldn't find any media in this Instagram post.")
                     continue
 
-                logger.info(f"Found video file at: {video_path}")
-                with open(video_path, 'rb') as video_file:
-                    video_data = video_file.read()
-
-                logger.info("Processing video file...")
-                processed_video, width, height = await process_video_file(video_data, "instagram_video.mp4")
-                video = BufferedInputFile(
-                    processed_video, filename="insta_video.mp4")
-                caption = post.caption if settings.with_captions else None
-
                 logger.info(
-                    f"Sending Instagram video to chat ID: {message.chat.id} with dimensions {width}x{height}")
+                    f"Found {len(media_files)} media file(s) for post {shortcode}")
+                caption = build_caption(post)
 
                 try:
-                    if settings.reply_to_message:
-                        await message.reply_video(
-                            video=video,
-                            caption=caption,
-                            parse_mode=ParseMode.HTML,
-                            width=width,
-                            height=height,
-                            supports_streaming=True
-                        )
-                    else:
-                        await bot.send_video(
-                            chat_id=message.chat.id,
-                            video=video,
-                            caption=caption,
-                            parse_mode=ParseMode.HTML,
-                            width=width,
-                            height=height,
-                            supports_streaming=True
-                        )
-                    logger.info("Successfully sent video to user")
+                    await send_instagram_media(
+                        media_files, caption, message, bot)
+                    logger.info("Successfully sent Instagram media to user")
                 except Exception as e:
-                    logger.error(f"Failed to send video: {e}")
+                    logger.error(f"Failed to send Instagram media: {e}")
                     raise
 
 
@@ -393,5 +518,5 @@ async def _process_instagram_urls(urls, message: Message, bot: Bot,
                 "Sorry, Instagram is requiring additional verification on this account "
                 "right now. This isn't something retrying will fix.")
         except Exception as e:
-            logger.exception(f"Error downloading Instagram video: {e}")
+            logger.exception(f"Error downloading Instagram post: {e}")
             await message.reply(f"Sorry, there was an error processing your Instagram link: {str(e)}")
