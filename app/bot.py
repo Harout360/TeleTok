@@ -114,6 +114,25 @@ else:
     logger.warning(
         "No Instagram credentials provided. Some features might be limited.")
 
+# Path segments that precede a shortcode in an Instagram media URL. Instagram serves the
+# same content under several of these: /p/ for posts (including reels shared as posts),
+# /reel/ and /reels/ for reels, /tv/ for legacy IGTV.
+INSTAGRAM_MEDIA_PATHS = {"p", "reel", "reels", "tv"}
+
+
+def extract_shortcode(url: str) -> str | None:
+    """Pull the shortcode out of an Instagram media URL, or None if there isn't one.
+
+    Handles the profile-scoped forms (/<username>/reel/<shortcode>/) as well as the bare
+    ones by scanning for a known media segment rather than assuming it comes first.
+    """
+    path_parts = [part for part in urlparse(url).path.split("/") if part]
+    for index, part in enumerate(path_parts[:-1]):
+        if part in INSTAGRAM_MEDIA_PATHS:
+            return path_parts[index + 1]
+    return None
+
+
 tiktokFilters = [
     F.text.contains("tiktok.com"),
     (not settings.allowed_ids)
@@ -212,17 +231,12 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
     for url in urls:
         try:
             logger.info(f"Starting to process Instagram URL: {url}")
-            # Parse the URL to get the path
-            parsed_url = urlparse(url)
-            path_parts = parsed_url.path.strip("/").split("/")
-
-            # Check if the URL path is valid and contains 'reel' followed by a shortcode
-            if len(path_parts) >= 2 and path_parts[0] == "reel":
-                shortcode = path_parts[1]
+            shortcode = extract_shortcode(url)
+            if shortcode:
                 logger.info(f"Extracted shortcode: {shortcode}")
             else:
-                logger.warning(f"Invalid Instagram reel URL: {url}")
-                await message.reply("Invalid Instagram reel URL. Please send a valid reel link.")
+                logger.warning(f"Unrecognized Instagram URL: {url}")
+                await message.reply("That doesn't look like an Instagram post or reel link.")
                 continue
 
             # Load the post using the shortcode with improved retry logic
