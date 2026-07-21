@@ -7,6 +7,7 @@ import random
 import asyncio
 import tempfile
 import shutil
+from contextlib import suppress
 from video_processor import process_video_file  # Import from new module
 
 from aiogram import Bot, Dispatcher, F
@@ -155,6 +156,9 @@ async def handle_tiktok_request(message: Message, bot: Bot) -> None:
         for u in filter(lambda e: "tiktok.com" in e, entries)
     ]
 
+    if not urls:
+        return
+
     logger.info(f"Processing Tiktok link: {urls[0]}")
 
     async for tiktok in TikTokAPI.download_tiktoks(urls):
@@ -197,7 +201,8 @@ async def handle_tiktok_request(message: Message, bot: Bot) -> None:
             logger.error(f"Failed to process TikTok video: {e}")
             await message.reply("🎭 My sincerest apologies, but I encountered difficulties processing this TikTok video.")
         finally:
-            await processing_msg.delete()
+            with suppress(Exception):
+                await processing_msg.delete()
 
 
 # IG
@@ -224,10 +229,24 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
         for u in filter(lambda e: "instagram.com" in e, entries)
     ]
 
+    if not urls:
+        return
+
     processing_msg = await message.answer(random.choice(INSTAGRAM_BUTLER_MESSAGES), reply_to_message_id=message.message_id)
     start_time = asyncio.get_event_loop().time()
     TIMEOUT_SECONDS = 120  # 2 minutes timeout
 
+    try:
+        await _process_instagram_urls(urls, message, bot, start_time, TIMEOUT_SECONDS)
+    finally:
+        # Always clear the "fetching..." placeholder, on success or on any error path.
+        # Deletion can legitimately fail (already gone, or older than Telegram allows).
+        with suppress(Exception):
+            await processing_msg.delete()
+
+
+async def _process_instagram_urls(urls, message: Message, bot: Bot,
+                                  start_time: float, TIMEOUT_SECONDS: int) -> None:
     for url in urls:
         try:
             logger.info(f"Starting to process Instagram URL: {url}")
@@ -320,7 +339,6 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
 
                 if not video_path:
                     logger.warning(f"No video file found for post {shortcode}")
-                    await processing_msg.delete()
                     await message.reply("Sorry, couldn't find a video in this Instagram post.")
                     continue
 
@@ -362,22 +380,18 @@ async def handle_instagram_request(message: Message, bot: Bot) -> None:
                     logger.error(f"Failed to send video: {e}")
                     raise
 
-                await processing_msg.delete()
 
         except TimeoutError:
             logger.error(
                 f"Processing timed out after {TIMEOUT_SECONDS} seconds")
-            await processing_msg.delete()
             await message.reply("Sorry, the request timed out. Please try again later.")
         except instaloader.exceptions.AbortDownloadException as e:
             # Instagram is demanding a checkpoint/challenge/feedback verification on this
             # account - retrying won't help, this needs manual intervention.
             logger.error(f"Instagram aborted the download, account may be flagged: {e}")
-            await processing_msg.delete()
             await message.reply(
                 "Sorry, Instagram is requiring additional verification on this account "
                 "right now. This isn't something retrying will fix.")
         except Exception as e:
             logger.exception(f"Error downloading Instagram video: {e}")
-            await processing_msg.delete()
             await message.reply(f"Sorry, there was an error processing your Instagram link: {str(e)}")
