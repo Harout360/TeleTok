@@ -21,7 +21,6 @@ from aiogram.types import (
 )
 from aiogram.enums import ParseMode
 
-import instaloader_patch
 from settings import settings
 from tiktok.api import TikTokAPI
 from urllib.parse import urlparse
@@ -54,8 +53,16 @@ logger = logging.getLogger(__name__)
 
 logger.info("Initializing bot dispatcher...")
 
-# Instagram's current API breaks instaloader 4.15.2; see app/instaloader_patch.py
-instaloader_patch.apply()
+
+class InstagramRateLimited(Exception):
+    """Instagram told us to back off; retrying straight away only extends the block."""
+
+
+def is_instagram_rate_limit(error: Exception) -> bool:
+    # Instagram answers a throttled account with 401 + "Please wait a few minutes before
+    # you try again." instaloader surfaces that as a plain ConnectionException.
+    return "Please wait a few minutes" in str(error)
+
 
 # Initialize dispatcher only (bot is initialized in main.py)
 dp = Dispatcher()
@@ -436,6 +443,8 @@ async def _process_instagram_urls(urls, message: Message, bot: Bot,
                     logger.info("Successfully fetched post data")
 
                 except instaloader.exceptions.ConnectionException as e:
+                    if is_instagram_rate_limit(e):
+                        raise InstagramRateLimited() from e
                     retry_count += 1
                     last_error = e
                     logger.warning(
@@ -517,6 +526,11 @@ async def _process_instagram_urls(urls, message: Message, bot: Bot,
             await message.reply(
                 "Sorry, Instagram is requiring additional verification on this account "
                 "right now. This isn't something retrying will fix.")
+        except InstagramRateLimited as e:
+            logger.error(f"Instagram is rate-limiting the account: {e.__cause__}")
+            await message.reply(
+                "Instagram is rate-limiting me right now. Give it a few minutes and "
+                "send the link again.")
         except Exception as e:
             logger.exception(f"Error downloading Instagram post: {e}")
             await message.reply(f"Sorry, there was an error processing your Instagram link: {str(e)}")
