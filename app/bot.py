@@ -67,8 +67,7 @@ def is_instagram_rate_limit(error: Exception) -> bool:
 # Initialize dispatcher only (bot is initialized in main.py)
 dp = Dispatcher()
 
-# Initialize Instagram loader with login if credentials are provided
-insta_loader = instaloader.Instaloader(
+INSTALOADER_OPTIONS = dict(
     download_videos=True,
     download_video_thumbnails=False,
     download_geotags=False,
@@ -84,6 +83,14 @@ insta_loader = instaloader.Instaloader(
     user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36",
     quiet=True
 )
+
+# Initialize Instagram loader with login if credentials are provided
+insta_loader = instaloader.Instaloader(**INSTALOADER_OPTIONS)
+
+# Never logged in. Logged-in post lookups go through graphql/query, which Instagram can
+# answer with a 401 "Please wait a few minutes" for days on end; logged-out lookups use
+# the web app's api/graphql endpoint instead and keep working for public posts.
+anonymous_loader = instaloader.Instaloader(**INSTALOADER_OPTIONS)
 
 # Try to login to Instagram if credentials are provided.
 # Note: settings is a dataclass, so hasattr() is always True here - check the values.
@@ -425,6 +432,7 @@ async def _process_instagram_urls(urls, message: Message, bot: Bot,
             retry_count = 0
             last_error = None
             post = None
+            loader = insta_loader
 
             while retry_count < max_retries and post is None:
                 try:
@@ -439,11 +447,16 @@ async def _process_instagram_urls(urls, message: Message, bot: Bot,
                     logger.info(
                         f"Fetching post data for shortcode: {shortcode}")
                     post = instaloader.Post.from_shortcode(
-                        insta_loader.context, shortcode)
+                        loader.context, shortcode)
                     logger.info("Successfully fetched post data")
 
                 except instaloader.exceptions.ConnectionException as e:
                     if is_instagram_rate_limit(e):
+                        if loader is insta_loader and insta_loader.context.is_logged_in:
+                            logger.warning(
+                                "Logged-in session is rate-limited; retrying without login")
+                            loader = anonymous_loader
+                            continue
                         raise InstagramRateLimited() from e
                     retry_count += 1
                     last_error = e
@@ -489,8 +502,8 @@ async def _process_instagram_urls(urls, message: Message, bot: Bot,
 
                 logger.info(
                     f"Downloading post to temporary directory: {temp_dir}")
-                insta_loader.dirname_pattern = temp_dir
-                insta_loader.download_post(post, target=shortcode)
+                loader.dirname_pattern = temp_dir
+                loader.download_post(post, target=shortcode)
                 logger.info("Post download completed")
 
                 # Collect every photo/video in the post, not just the first video -
